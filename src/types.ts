@@ -1,0 +1,90 @@
+export type RiskLevel = "low" | "medium" | "high";
+
+export type CheckStatus = "ok" | "warning" | "danger" | "unknown";
+
+export type ClaudeInfo = {
+  installed: boolean | null;
+  base_url: string | null;
+  endpoint_status: CheckStatus;
+  message: string;
+};
+
+export type CodexInfo = {
+  openai_api_key_present: boolean | null;
+  openai_base_url: string | null;
+  proxy_env_present: boolean;
+  endpoint_status: CheckStatus;
+  message: string;
+};
+
+export type RepairGuide = {
+  id: string;
+  title: string;
+  summary: string;
+  steps: string[];
+  developer_commands: string[];
+};
+
+export type DetailRow = {
+  label: string;
+  value: string;
+  status: CheckStatus;
+};
+
+export type DeveloperSection = {
+  title: string;
+  rows: DetailRow[];
+};
+
+export type GetAiOkCheckResult = {
+  id: string;
+  checked_at: string;
+  risk_level: RiskLevel;
+  beginner_summary: string;
+  real_ip: string | null;
+  ipv6: string | null;
+  dns_servers: string[];
+  exit_ip: string | null;
+  country: string | null;
+  region: string | null;
+  city: string | null;
+  isp: string | null;
+  org: string | null;
+  exit_timezone: string | null;
+  proxy_envs: Record<string, string>;
+  system_proxy_status: CheckStatus;
+  system_proxy_message: string;
+  tun_vpn_status: CheckStatus;
+  tun_vpn_message: string;
+  hosting: boolean | null;
+  proxy: boolean | null;
+  risk_score: number | null;
+  risk_query_message: string | null;
+  spam_listed: boolean | null;
+  spam_message: string | null;
+  system_timezone: string | null;
+  cli_timezone: string | null;
+  timezone_matched: boolean | null;
+  claude: ClaudeInfo;
+  codex: CodexInfo;
+  suggestions: string[];
+  repair_guides: RepairGuide[];
+  developer_details: DeveloperSection[];
+};
+
+export type HistoryEntry = {
+  id: string;
+  checked_at: string;
+  risk_level: RiskLevel;
+  beginner_summary: string;
+  exit_ip: string | null;
+  country: string | null;
+  region: string | null;
+  city: string | null;
+  isp: string | null;
+  suggestion_count: number;
+  danger_count: number;
+  result: GetAiOkCheckResult;
+};
+
+export type ViewMode = "float" | "report" | "history" | "guide" | "privacy";
