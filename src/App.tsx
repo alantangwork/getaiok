@@ -794,13 +794,13 @@ function statusClass(status: CheckStatus) {
 }
 
 function issueTitle(text: string) {
+  if (text.includes("时区")) return "时区和出口地区不一致";
   if (text.includes("出口 IP") || text.includes("机房") || text.includes("IP 风险")) {
     return "出口 IP 为机房/代理 IP";
   }
   if (text.includes("端点") || text.includes("Base URL")) return "第三方端点需要确认";
   if (text.includes("CLI") || text.includes("环境变量")) return "CLI 代理环境变量未设置";
   if (text.includes("代理")) return "代理配置需要关注";
-  if (text.includes("时区")) return "时区和出口地区不一致";
   if (text.includes("DNS")) return "DNS 可能暴露地区特征";
   if (text.includes("IPv6")) return "IPv6 可能暴露真实地址";
   return "需要关注";

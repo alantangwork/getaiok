@@ -184,13 +184,17 @@ pub struct HistoryEntry {
 }
 
 #[tauri::command]
-pub fn run_get_ai_ok_check(
+pub async fn run_get_ai_ok_check(
     app: AppHandle,
     browser_probe: Option<BrowserNetworkProbe>,
 ) -> Result<GetAiOkCheckResult, String> {
-    let result = build_check_result(browser_probe);
-    append_history(&app, &result)?;
-    Ok(result)
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = build_check_result(browser_probe);
+        append_history(&app, &result)?;
+        Ok(result)
+    })
+    .await
+    .map_err(|err| format!("检测任务执行失败：{err}"))?
 }
 
 #[tauri::command]
@@ -622,19 +626,33 @@ Get-NetAdapter | Where-Object {$_.Status -eq 'Up'} | ForEach-Object {
 }
 
 fn detect_proxy_app(system_proxy_message: &str, tun_vpn_message: &str) -> ProxyAppInfo {
+    let v2rayn_running = powershell(
+        "(Get-CimInstance Win32_Process -Filter \"name='v2rayN.exe'\" | Measure-Object).Count",
+        4,
+    )
+    .map(|value| value.trim() != "0" && !value.trim().is_empty())
+    .unwrap_or(false);
     let process_path = powershell(
         "(Get-Process v2rayN -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Path)",
         4,
     )
     .map(|value| value.trim().to_string())
     .filter(|value| !value.is_empty());
-    let detected = process_path.is_some()
+    let detected = v2rayn_running
+        || process_path.is_some()
         || system_proxy_message.to_lowercase().contains("v2ray")
         || system_proxy_message.contains("10808");
     let local_port = extract_local_port(system_proxy_message);
     let config_text = collect_v2rayn_config_text(process_path.as_deref());
-    let routing_modes = detect_v2rayn_routing_modes(&config_text);
-    let ai_rules = detect_ai_routing_rules(&config_text);
+    let mut routing_modes = detect_v2rayn_routing_modes(&config_text);
+    let mut ai_rules = detect_ai_routing_rules(&config_text);
+    if detected && config_text.trim().is_empty() {
+        routing_modes.push(
+            "检测到 v2rayN 正在运行，但未读取到配置文件；可能是 v2rayN 以管理员身份运行，或使用便携目录且当前权限无法读取。"
+                .to_string(),
+        );
+        ai_rules.push("未读取到路由规则内容，无法判断 Claude/OpenAI 规则。".to_string());
+    }
     let tun_enabled = if tun_vpn_message.contains("TUN") || tun_vpn_message.contains("VPN") {
         Some(tun_vpn_message.contains("疑似") || tun_vpn_message.contains("检测到"))
     } else {
@@ -643,7 +661,7 @@ fn detect_proxy_app(system_proxy_message: &str, tun_vpn_message: &str) -> ProxyA
 
     let message = if detected {
         let mode = if routing_modes.is_empty() {
-            "未读取到路由规则名称".to_string()
+            "未读取到路由规则".to_string()
         } else {
             routing_modes.join("，")
         };
