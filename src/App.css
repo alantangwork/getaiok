@@ -73,7 +73,9 @@ button {
   padding: 0 12px 0 14px;
   border-bottom: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.94);
+  cursor: move;
   user-select: none;
+  -webkit-app-region: drag;
 }
 
 .brand {
@@ -82,6 +84,7 @@ button {
   display: flex;
   align-items: center;
   gap: 10px;
+  -webkit-app-region: drag;
 }
 
 .brand-mark {
@@ -95,12 +98,14 @@ button {
   color: #fff;
   font-size: 12px;
   font-weight: 800;
+  -webkit-app-region: drag;
 }
 
 .brand-copy {
   min-width: 0;
   display: grid;
   gap: 1px;
+  -webkit-app-region: drag;
 }
 
 .brand-copy strong {
@@ -123,6 +128,7 @@ button {
 .window-actions {
   display: flex;
   gap: 2px;
+  -webkit-app-region: no-drag;
 }
 
 .icon-button {
@@ -135,6 +141,7 @@ button {
   background: transparent;
   color: var(--muted);
   cursor: pointer;
+  -webkit-app-region: no-drag;
 }
 
 .icon-button:hover {

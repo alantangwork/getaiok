@@ -68,6 +68,8 @@ const demoResult: GetAiOkCheckResult = {
     base_url: null,
     endpoint_status: "ok",
     message: "官方直连（未设置 ANTHROPIC_BASE_URL）",
+    detected_products: ["Claude 桌面客户端"],
+    timezone_advice: "Claude 检测为桌面客户端，优先调整 Windows 系统时区；$env:TZ 只影响命令行。",
   },
   codex: {
     openai_api_key_present: true,
@@ -75,6 +77,19 @@ const demoResult: GetAiOkCheckResult = {
     proxy_env_present: false,
     endpoint_status: "ok",
     message: "未设置 OpenAI Base URL，默认官方端点",
+    detected_products: ["Codex 桌面客户端"],
+    timezone_advice: "Codex 检测为桌面客户端，优先调整 Windows 系统时区；$env:TZ 只影响命令行。",
+  },
+  proxy_app: {
+    detected: true,
+    name: "v2rayN",
+    process_path: null,
+    local_port: "10808",
+    system_proxy: "已开启：127.0.0.1:10808",
+    tun_enabled: true,
+    routing_modes: ["V4-绕过大陆(Whitelist)"],
+    ai_rules: ["检测到 Claude 相关路由规则"],
+    message: "检测到 v2rayN；本地端口：10808；路由：V4-绕过大陆(Whitelist)",
   },
   suggestions: [
     "终端代理未设置，Claude/Codex 可能不会走代理。",

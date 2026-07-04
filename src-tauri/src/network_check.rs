@@ -40,6 +40,9 @@ pub struct ClaudeInfo {
     pub base_url: Option<String>,
     pub endpoint_status: CheckStatus,
     pub message: String,
+    #[serde(default)]
+    pub detected_products: Vec<String>,
+    pub timezone_advice: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,6 +51,24 @@ pub struct CodexInfo {
     pub openai_base_url: Option<String>,
     pub proxy_env_present: bool,
     pub endpoint_status: CheckStatus,
+    pub message: String,
+    #[serde(default)]
+    pub detected_products: Vec<String>,
+    pub timezone_advice: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ProxyAppInfo {
+    pub detected: bool,
+    pub name: Option<String>,
+    pub process_path: Option<String>,
+    pub local_port: Option<String>,
+    pub system_proxy: Option<String>,
+    pub tun_enabled: Option<bool>,
+    #[serde(default)]
+    pub routing_modes: Vec<String>,
+    #[serde(default)]
+    pub ai_rules: Vec<String>,
     pub message: String,
 }
 
@@ -126,6 +147,7 @@ pub struct GetAiOkCheckResult {
     pub system_proxy_message: String,
     pub tun_vpn_status: CheckStatus,
     pub tun_vpn_message: String,
+    pub proxy_app: ProxyAppInfo,
     pub hosting: Option<bool>,
     pub proxy: Option<bool>,
     pub risk_score: Option<u8>,
@@ -234,6 +256,7 @@ fn build_check_result(browser_probe: Option<BrowserNetworkProbe>) -> GetAiOkChec
     let proxy_envs = get_proxy_envs();
     let (system_proxy_status, system_proxy_message) = get_system_proxy_status();
     let (tun_vpn_status, tun_vpn_message) = get_tun_vpn_status();
+    let proxy_app = detect_proxy_app(&system_proxy_message, &tun_vpn_message);
     let system_timezone = get_system_timezone();
     let cli_timezone = env::var("TZ").ok().or_else(|| system_timezone.clone());
     let exit_timezone = browser_probe
@@ -266,7 +289,7 @@ fn build_check_result(browser_probe: Option<BrowserNetworkProbe>) -> GetAiOkChec
     }
 
     if proxy_envs.is_empty() {
-        suggestions.push("终端代理未设置，Claude/Codex 可能不会走代理。".to_string());
+        suggestions.push("CLI 代理环境变量未设置；如果使用 Claude/Codex CLI，可能不会走代理。".to_string());
         guides.push(proxy_env_guide());
     }
 
@@ -344,6 +367,7 @@ fn build_check_result(browser_probe: Option<BrowserNetworkProbe>) -> GetAiOkChec
         system_proxy_message,
         tun_vpn_status,
         tun_vpn_message,
+        proxy_app,
         hosting,
         proxy,
         risk_score,
@@ -597,6 +621,155 @@ Get-NetAdapter | Where-Object {$_.Status -eq 'Up'} | ForEach-Object {
     }
 }
 
+fn detect_proxy_app(system_proxy_message: &str, tun_vpn_message: &str) -> ProxyAppInfo {
+    let process_path = powershell(
+        "(Get-Process v2rayN -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Path)",
+        4,
+    )
+    .map(|value| value.trim().to_string())
+    .filter(|value| !value.is_empty());
+    let detected = process_path.is_some()
+        || system_proxy_message.to_lowercase().contains("v2ray")
+        || system_proxy_message.contains("10808");
+    let local_port = extract_local_port(system_proxy_message);
+    let config_text = collect_v2rayn_config_text(process_path.as_deref());
+    let routing_modes = detect_v2rayn_routing_modes(&config_text);
+    let ai_rules = detect_ai_routing_rules(&config_text);
+    let tun_enabled = if tun_vpn_message.contains("TUN") || tun_vpn_message.contains("VPN") {
+        Some(tun_vpn_message.contains("疑似") || tun_vpn_message.contains("检测到"))
+    } else {
+        None
+    };
+
+    let message = if detected {
+        let mode = if routing_modes.is_empty() {
+            "未读取到路由规则名称".to_string()
+        } else {
+            routing_modes.join("，")
+        };
+        format!("检测到 v2rayN；本地端口：{}；路由：{}", local_port.clone().unwrap_or_else(|| "未知".to_string()), mode)
+    } else {
+        "未检测到 v2rayN".to_string()
+    };
+
+    ProxyAppInfo {
+        detected,
+        name: detected.then(|| "v2rayN".to_string()),
+        process_path,
+        local_port,
+        system_proxy: Some(system_proxy_message.to_string()),
+        tun_enabled,
+        routing_modes,
+        ai_rules,
+        message,
+    }
+}
+
+fn extract_local_port(text: &str) -> Option<String> {
+    let marker = "127.0.0.1:";
+    let index = text.find(marker)?;
+    let rest = &text[index + marker.len()..];
+    let port: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    (!port.is_empty()).then(|| port)
+}
+
+fn collect_v2rayn_config_text(process_path: Option<&str>) -> String {
+    let mut roots = Vec::new();
+    if let Some(path) = process_path {
+        let path = PathBuf::from(path);
+        if let Some(parent) = path.parent() {
+            roots.push(parent.to_path_buf());
+        }
+    }
+    if let Some(appdata) = env::var_os("APPDATA").map(PathBuf::from) {
+        roots.push(appdata.join("v2rayN"));
+    }
+    if let Some(local) = env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+        roots.push(local.join("v2rayN"));
+    }
+
+    let mut text = String::new();
+    for root in roots {
+        collect_config_text_from_dir(&root, 0, &mut text);
+        if text.len() > 2_000_000 {
+            break;
+        }
+    }
+    text
+}
+
+fn collect_config_text_from_dir(dir: &PathBuf, depth: usize, out: &mut String) {
+    if depth > 3 || out.len() > 2_000_000 || !dir.exists() {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_config_text_from_dir(&path, depth + 1, out);
+            continue;
+        }
+        let ext = path.extension().and_then(|value| value.to_str()).unwrap_or("");
+        if !matches!(ext.to_ascii_lowercase().as_str(), "json" | "txt") {
+            continue;
+        }
+        if let Ok(meta) = entry.metadata() {
+            if meta.len() > 500_000 {
+                continue;
+            }
+        }
+        if let Ok(content) = fs::read_to_string(&path) {
+            let lower = content.to_lowercase();
+            if lower.contains("routing")
+                || lower.contains("outboundtag")
+                || lower.contains("claude")
+                || lower.contains("anthropic")
+                || lower.contains("openai")
+                || lower.contains("chatgpt")
+                || content.contains("绕过大陆")
+            {
+                out.push_str(&content);
+                out.push('\n');
+            }
+        }
+    }
+}
+
+fn detect_v2rayn_routing_modes(config_text: &str) -> Vec<String> {
+    let mut modes = Vec::new();
+    for needle in [
+        "V4-绕过大陆(Whitelist)",
+        "V4-黑名单(Blacklist)",
+        "V4-全局(Global)",
+        "绕过大陆",
+        "Whitelist",
+        "Blacklist",
+        "Global",
+    ] {
+        if config_text.contains(needle) {
+            modes.push(needle.to_string());
+        }
+    }
+    dedup(modes)
+}
+
+fn detect_ai_routing_rules(config_text: &str) -> Vec<String> {
+    let lower = config_text.to_lowercase();
+    let mut rules = Vec::new();
+    if lower.contains("anthropic.com") || lower.contains("claude.ai") || lower.contains("claude") {
+        rules.push("检测到 Claude 相关路由规则".to_string());
+    }
+    if lower.contains("openai.com") || lower.contains("chatgpt.com") || lower.contains("oaistatic.com") {
+        rules.push("检测到 OpenAI/ChatGPT 相关路由规则".to_string());
+    }
+    if lower.contains("\"outboundtag\":\"proxy\"") || lower.contains("outboundtag") && lower.contains("proxy") {
+        rules.push("检测到 proxy 出站规则".to_string());
+    }
+    dedup(rules)
+}
+
 fn get_system_timezone() -> Option<String> {
     powershell("[System.TimeZoneInfo]::Local.Id", 3).map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
 }
@@ -617,6 +790,7 @@ fn get_claude_info() -> ClaudeInfo {
     let shell_base = env::var("ANTHROPIC_BASE_URL").ok();
     let config_base = read_claude_base_url_from_settings();
     let base_url = shell_base.or(config_base);
+    let detected_products = detect_claude_products();
     let installed = Some(
         env::var("CLAUDE_CONFIG_DIR")
             .ok()
@@ -624,8 +798,9 @@ fn get_claude_info() -> ClaudeInfo {
             .or_else(|| home_dir().map(|home| home.join(".claude")))
             .is_some_and(|path| path.exists())
             || home_dir().is_some_and(|home| home.join(".claude.json").exists())
-            || command_exists("claude"),
+            || !detected_products.is_empty(),
     );
+    let timezone_advice = Some(product_timezone_advice(&detected_products, "Claude"));
 
     match base_url {
         None => ClaudeInfo {
@@ -633,18 +808,24 @@ fn get_claude_info() -> ClaudeInfo {
             base_url: None,
             endpoint_status: CheckStatus::Ok,
             message: "官方直连（未设置 ANTHROPIC_BASE_URL）".to_string(),
+            detected_products,
+            timezone_advice,
         },
         Some(url) if is_official_anthropic(&url) => ClaudeInfo {
             installed,
             base_url: Some(url),
             endpoint_status: CheckStatus::Ok,
             message: "官方端点 api.anthropic.com".to_string(),
+            detected_products,
+            timezone_advice,
         },
         Some(url) => ClaudeInfo {
             installed,
             base_url: Some(mask_url(&url)),
             endpoint_status: CheckStatus::Danger,
             message: "检测到非官方 Claude 端点".to_string(),
+            detected_products,
+            timezone_advice,
         },
     }
 }
@@ -654,6 +835,8 @@ fn get_codex_info(proxy_env_present: bool) -> CodexInfo {
     let base_url = env::var("OPENAI_BASE_URL")
         .ok()
         .or_else(|| env::var("OPENAI_API_BASE").ok());
+    let detected_products = detect_codex_products();
+    let timezone_advice = Some(product_timezone_advice(&detected_products, "Codex"));
     let (endpoint_status, message) = match &base_url {
         None => (CheckStatus::Ok, "未设置 OpenAI Base URL，默认官方端点".to_string()),
         Some(url) if is_official_openai(url) => (CheckStatus::Ok, "官方 OpenAI 端点".to_string()),
@@ -666,6 +849,8 @@ fn get_codex_info(proxy_env_present: bool) -> CodexInfo {
         proxy_env_present,
         endpoint_status,
         message,
+        detected_products,
+        timezone_advice,
     }
 }
 
@@ -711,6 +896,76 @@ fn mask_url(raw: &str) -> String {
         Ok(url) => url.host_str().unwrap_or(raw).to_string(),
         Err(_) => raw.to_string(),
     }
+}
+
+fn detect_claude_products() -> Vec<String> {
+    let mut products = Vec::new();
+    if command_exists("claude") {
+        products.push("Claude Code CLI".to_string());
+    }
+    if installed_app_names(&["Claude"]).iter().any(|name| name.contains("Claude")) {
+        products.push("Claude 桌面客户端".to_string());
+    }
+    if home_dir().is_some_and(|home| home.join(".claude").exists() || home.join(".claude.json").exists()) {
+        if !products.iter().any(|name| name == "Claude Code CLI") {
+            products.push("Claude Code CLI 配置".to_string());
+        }
+    }
+    dedup(products)
+}
+
+fn detect_codex_products() -> Vec<String> {
+    let mut products = Vec::new();
+    if command_exists("codex") {
+        products.push("Codex CLI".to_string());
+    }
+    for name in installed_app_names(&["Codex", "OpenAI", "ChatGPT"]) {
+        if name.to_lowercase().contains("codex") {
+            products.push("Codex 桌面客户端".to_string());
+        } else if name.to_lowercase().contains("chatgpt") || name.to_lowercase().contains("openai") {
+            products.push(name);
+        }
+    }
+    dedup(products)
+}
+
+fn installed_app_names(patterns: &[&str]) -> Vec<String> {
+    let pattern = patterns.join("|");
+    let script = format!(
+        "Get-StartApps | Where-Object {{$_.Name -match '{}'}} | Select-Object -ExpandProperty Name",
+        pattern.replace('\'', "''")
+    );
+    powershell(&script, 4)
+        .unwrap_or_default()
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn product_timezone_advice(products: &[String], product: &str) -> String {
+    let has_cli = products.iter().any(|item| item.to_lowercase().contains("cli"));
+    let has_desktop = products
+        .iter()
+        .any(|item| item.contains("桌面") || item.to_lowercase().contains("chatgpt"));
+    if has_desktop && !has_cli {
+        format!("{product} 检测为桌面客户端，优先调整 Windows 系统时区；$env:TZ 只影响命令行。")
+    } else if has_cli {
+        format!("{product} 检测到 CLI，CLI 可临时设置 $env:TZ；若使用桌面客户端仍需调整 Windows 系统时区。")
+    } else {
+        format!("未明确识别 {product} 产品类型。若使用桌面客户端，请调整 Windows 系统时区；若使用 CLI，可临时设置 $env:TZ。")
+    }
+}
+
+fn dedup(values: Vec<String>) -> Vec<String> {
+    let mut out = Vec::new();
+    for value in values {
+        if !out.iter().any(|item| item == &value) {
+            out.push(value);
+        }
+    }
+    out
 }
 
 fn command_exists(name: &str) -> bool {
@@ -765,8 +1020,8 @@ fn dns_has_cn(servers: &[String]) -> bool {
 fn proxy_env_guide() -> RepairGuide {
     RepairGuide {
         id: "proxy-env".to_string(),
-        title: "终端代理可能未设置".to_string(),
-        summary: "Claude Code、Codex 这类命令行工具，不一定会自动使用系统代理。".to_string(),
+        title: "设置 CLI 代理环境变量".to_string(),
+        summary: "Claude Code、Codex CLI 这类命令行工具，不一定会自动使用系统代理；桌面客户端通常跟随系统代理或 TUN。".to_string(),
         steps: vec![
             "打开你的代理软件。".to_string(),
             "找到本地 HTTP 或 SOCKS5 端口。".to_string(),
@@ -811,19 +1066,18 @@ fn dns_guide() -> RepairGuide {
 }
 
 fn timezone_guide(exit_timezone: Option<String>) -> RepairGuide {
+    let target = exit_timezone.unwrap_or_else(|| "America/Los_Angeles".to_string());
     RepairGuide {
         id: "timezone".to_string(),
-        title: "调整 CLI 时区".to_string(),
-        summary: "本机时区与出口 IP 所在地区不一致，可能形成异常环境特征。".to_string(),
+        title: "调整系统或 CLI 时区".to_string(),
+        summary: "本机时区与出口 IP 所在地区不一致。桌面客户端通常跟随 Windows 系统时区，CLI 才会读取当前终端的 TZ。".to_string(),
         steps: vec![
-            "确认当前出口 IP 所在时区。".to_string(),
-            "仅在当前终端临时设置 TZ，避免影响整个系统。".to_string(),
-            "重新运行检测确认时区一致性。".to_string(),
+            format!("确认当前出口 IP 所在时区：{target}。"),
+            "如果使用 Claude/Codex 桌面客户端：打开 Windows 设置 -> 时间和语言 -> 日期和时间 -> 时区，改为与出口 IP 匹配的时区。".to_string(),
+            "如果只使用 CLI：可以仅在当前 PowerShell 临时设置 TZ，避免影响整个系统。".to_string(),
+            "重新打开对应客户端或终端，然后重新运行检测确认时区一致性。".to_string(),
         ],
-        developer_commands: vec![format!(
-            r#"$env:TZ="{}""#,
-            exit_timezone.unwrap_or_else(|| "America/Los_Angeles".to_string())
-        )],
+        developer_commands: vec![format!(r#"$env:TZ="{target}""#)],
     }
 }
 
@@ -887,13 +1141,20 @@ fn developer_details(result: &GetAiOkCheckResult) -> Vec<DeveloperSection> {
                 row("环境变量", if result.proxy_envs.is_empty() { "未设置".to_string() } else { format!("已设置 {} 项", result.proxy_envs.len()) }, if result.proxy_envs.is_empty() { CheckStatus::Warning } else { CheckStatus::Ok }),
                 row("系统代理", result.system_proxy_message.clone(), result.system_proxy_status.clone()),
                 row("TUN/VPN", result.tun_vpn_message.clone(), result.tun_vpn_status.clone()),
+                row("代理软件", result.proxy_app.message.clone(), if result.proxy_app.detected { CheckStatus::Ok } else { CheckStatus::Unknown }),
+                row("v2rayN 路由模式", list(&result.proxy_app.routing_modes), if result.proxy_app.routing_modes.is_empty() { CheckStatus::Unknown } else { CheckStatus::Ok }),
+                row("AI 路由规则", list(&result.proxy_app.ai_rules), if result.proxy_app.ai_rules.is_empty() { CheckStatus::Unknown } else { CheckStatus::Ok }),
             ],
         },
         DeveloperSection {
             title: "Claude / Codex".to_string(),
             rows: vec![
                 row("Claude", result.claude.message.clone(), result.claude.endpoint_status.clone()),
+                row("Claude 产品", list(&result.claude.detected_products), CheckStatus::Unknown),
+                row("Claude 时区建议", result.claude.timezone_advice.clone().unwrap_or_else(|| "未知".to_string()), CheckStatus::Unknown),
                 row("Codex", result.codex.message.clone(), result.codex.endpoint_status.clone()),
+                row("Codex 产品", list(&result.codex.detected_products), CheckStatus::Unknown),
+                row("Codex 时区建议", result.codex.timezone_advice.clone().unwrap_or_else(|| "未知".to_string()), CheckStatus::Unknown),
                 row("OPENAI_API_KEY", if result.codex.openai_api_key_present == Some(true) { "已设置".to_string() } else { "未设置".to_string() }, CheckStatus::Unknown),
             ],
         },

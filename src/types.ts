@@ -7,6 +7,8 @@ export type ClaudeInfo = {
   base_url: string | null;
   endpoint_status: CheckStatus;
   message: string;
+  detected_products: string[];
+  timezone_advice: string | null;
 };
 
 export type CodexInfo = {
@@ -14,6 +16,20 @@ export type CodexInfo = {
   openai_base_url: string | null;
   proxy_env_present: boolean;
   endpoint_status: CheckStatus;
+  message: string;
+  detected_products: string[];
+  timezone_advice: string | null;
+};
+
+export type ProxyAppInfo = {
+  detected: boolean;
+  name: string | null;
+  process_path: string | null;
+  local_port: string | null;
+  system_proxy: string | null;
+  tun_enabled: boolean | null;
+  routing_modes: string[];
+  ai_rules: string[];
   message: string;
 };
 
@@ -85,6 +101,7 @@ export type GetAiOkCheckResult = {
   system_proxy_message: string;
   tun_vpn_status: CheckStatus;
   tun_vpn_message: string;
+  proxy_app: ProxyAppInfo;
   hosting: boolean | null;
   proxy: boolean | null;
   risk_score: number | null;
