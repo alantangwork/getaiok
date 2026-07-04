@@ -26,6 +26,7 @@ import {
   listCheckHistory,
   runGetAiOkCheck,
 } from "./api";
+import logoMark from "./assets/logo-mark.svg";
 import type {
   BrowserProbeSource,
   CheckStatus,
@@ -294,7 +295,7 @@ function TitleBar({
         </button>
       )}
       <div className="brand" data-tauri-drag-region>
-        <div className="brand-mark">OK</div>
+        <img className="brand-mark" src={logoMark} alt="" aria-hidden="true" />
         <div className="brand-copy" data-tauri-drag-region>
           <strong>get ai ok</strong>
           <span>{subtitle}</span>

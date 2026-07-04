@@ -88,16 +88,10 @@ button {
 }
 
 .brand-mark {
-  width: 26px;
-  height: 26px;
-  display: grid;
-  place-items: center;
+  width: 32px;
+  height: 32px;
+  display: block;
   flex: 0 0 auto;
-  border-radius: 7px;
-  background: var(--text);
-  color: #fff;
-  font-size: 12px;
-  font-weight: 800;
   -webkit-app-region: drag;
 }
 

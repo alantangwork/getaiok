@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="get ai ok logo">
+  <defs>
+    <linearGradient id="bg" x1="32" y1="24" x2="224" y2="232" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#101a2e"/>
+      <stop offset="1" stop-color="#172033"/>
+    </linearGradient>
+    <linearGradient id="path" x1="50" y1="175" x2="202" y2="70" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#31d19a"/>
+      <stop offset="0.48" stop-color="#32b7ff"/>
+      <stop offset="1" stop-color="#246bfe"/>
+    </linearGradient>
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="12" flood-color="#000000" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+  <rect x="18" y="18" width="220" height="220" rx="52" fill="url(#bg)" filter="url(#softShadow)"/>
+  <path d="M58 137 L101 178 L194 78" fill="none" stroke="url(#path)" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="58" cy="137" r="17" fill="#172033" stroke="#31d19a" stroke-width="10"/>
+  <circle cx="101" cy="178" r="17" fill="#172033" stroke="#32b7ff" stroke-width="10"/>
+  <circle cx="194" cy="78" r="17" fill="#172033" stroke="#246bfe" stroke-width="10"/>
+  <path d="M72 82 H103 M72 103 H126" fill="none" stroke="#e8f2ff" stroke-width="12" stroke-linecap="round" opacity="0.92"/>
+  <circle cx="168" cy="154" r="8" fill="#31d19a"/>
+  <circle cx="194" cy="154" r="8" fill="#32b7ff"/>
+  <circle cx="194" cy="180" r="8" fill="#246bfe"/>
+</svg>
