@@ -17,6 +17,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import { Image } from "@tauri-apps/api/image";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   clearCheckHistory,
@@ -27,6 +28,7 @@ import {
   runGetAiOkCheck,
 } from "./api";
 import logoMark from "./assets/logo-mark.svg";
+import logoMarkPng from "./assets/logo-mark.png";
 import type {
   BrowserProbeSource,
   CheckStatus,
@@ -53,6 +55,25 @@ function App() {
 
   useEffect(() => {
     void refreshHistory();
+  }, []);
+
+  useEffect(() => {
+    if (!isTauri) {
+      return;
+    }
+
+    async function applyWindowIcon() {
+      try {
+        const response = await fetch(logoMarkPng);
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        const icon = await Image.fromBytes(bytes);
+        await getCurrentWindow().setIcon(icon);
+      } catch (err) {
+        console.warn("Failed to set window icon", err);
+      }
+    }
+
+    void applyWindowIcon();
   }, []);
 
   async function refreshHistory() {
