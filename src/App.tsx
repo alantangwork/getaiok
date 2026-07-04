@@ -253,10 +253,38 @@ function TitleBar({
   onMinimize,
   onClose,
 }: TitleBarProps) {
+  async function startDrag(event: React.MouseEvent<HTMLElement>) {
+    if (!isTauri || event.button !== 0) {
+      return;
+    }
+    const target = event.target as HTMLElement;
+    if (target.closest("button")) {
+      return;
+    }
+    await getCurrentWindow().startDragging();
+  }
+
+  function runButtonAction(
+    event: React.MouseEvent<HTMLButtonElement>,
+    action: () => void,
+  ) {
+    event.stopPropagation();
+    action();
+  }
+
   return (
-    <header className="titlebar" data-tauri-drag-region>
+    <header
+      className="titlebar"
+      data-tauri-drag-region
+      onMouseDown={startDrag}
+    >
       {onBack && (
-        <button className="icon-button" type="button" title="返回浮窗" onClick={onBack}>
+        <button
+          className="icon-button"
+          type="button"
+          title="返回浮窗"
+          onClick={(event) => runButtonAction(event, onBack)}
+        >
           <ChevronLeft size={17} />
         </button>
       )}
@@ -268,13 +296,28 @@ function TitleBar({
         </div>
       </div>
       <div className="window-actions">
-        <button className="icon-button" type="button" title={pinned ? "取消置顶" : "置顶"} onClick={onTogglePin}>
+        <button
+          className="icon-button"
+          type="button"
+          title={pinned ? "取消置顶" : "置顶"}
+          onClick={(event) => runButtonAction(event, onTogglePin)}
+        >
           {pinned ? <PinOff size={15} /> : <Pin size={15} />}
         </button>
-        <button className="icon-button" type="button" title="最小化" onClick={onMinimize}>
+        <button
+          className="icon-button"
+          type="button"
+          title="最小化"
+          onClick={(event) => runButtonAction(event, onMinimize)}
+        >
           <Minimize2 size={15} />
         </button>
-        <button className="icon-button danger" type="button" title="关闭" onClick={onClose}>
+        <button
+          className="icon-button danger"
+          type="button"
+          title="关闭"
+          onClick={(event) => runButtonAction(event, onClose)}
+        >
           <X size={16} />
         </button>
       </div>
