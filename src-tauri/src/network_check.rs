@@ -118,6 +118,7 @@ pub struct GetAiOkCheckResult {
     pub org: Option<String>,
     pub asn: Option<String>,
     pub ip_version: Option<String>,
+    #[serde(default)]
     pub browser_probe_sources: Vec<BrowserProbeSource>,
     pub exit_timezone: Option<String>,
     pub proxy_envs: BTreeMap<String, String>,
@@ -136,8 +137,11 @@ pub struct GetAiOkCheckResult {
     pub timezone_matched: Option<bool>,
     pub claude: ClaudeInfo,
     pub codex: CodexInfo,
+    #[serde(default)]
     pub suggestions: Vec<String>,
+    #[serde(default)]
     pub repair_guides: Vec<RepairGuide>,
+    #[serde(default)]
     pub developer_details: Vec<DeveloperSection>,
 }
 
@@ -980,6 +984,16 @@ fn read_history(app: &AppHandle) -> Result<Vec<HistoryEntry>, String> {
     serde_json::from_str(&text).map_err(|err| format!("历史记录格式错误：{err}"))
 }
 
+fn read_history_lossy(app: &AppHandle) -> Vec<HistoryEntry> {
+    match read_history(app) {
+        Ok(items) => items,
+        Err(err) => {
+            let _ = backup_invalid_history(app, &err);
+            Vec::new()
+        }
+    }
+}
+
 fn write_history(app: &AppHandle, items: &[HistoryEntry]) -> Result<(), String> {
     let path = history_path(app)?;
     let text = serde_json::to_string_pretty(items).map_err(|err| format!("无法序列化历史记录：{err}"))?;
@@ -987,10 +1001,21 @@ fn write_history(app: &AppHandle, items: &[HistoryEntry]) -> Result<(), String> 
 }
 
 fn append_history(app: &AppHandle, result: &GetAiOkCheckResult) -> Result<(), String> {
-    let mut items = read_history(app)?;
+    let mut items = read_history_lossy(app);
     items.insert(0, HistoryEntry::from_result(result.clone()));
     items.truncate(HISTORY_LIMIT);
     write_history(app, &items)
+}
+
+fn backup_invalid_history(app: &AppHandle, reason: &str) -> Result<(), String> {
+    let path = history_path(app)?;
+    if !path.exists() {
+        return Ok(());
+    }
+    let timestamp = Local::now().format("%Y%m%d-%H%M%S");
+    let backup = path.with_file_name(format!("history.invalid-{timestamp}.json"));
+    fs::rename(&path, &backup)
+        .map_err(|err| format!("无法备份损坏历史记录：{reason}; {err}"))
 }
 
 impl HistoryEntry {
