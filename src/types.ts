@@ -36,6 +36,32 @@ export type DeveloperSection = {
   rows: DetailRow[];
 };
 
+export type BrowserProbeSource = {
+  name: string;
+  ip: string | null;
+  country: string | null;
+  region: string | null;
+  city: string | null;
+  isp: string | null;
+  org: string | null;
+  asn: string | null;
+  timezone: string | null;
+  error: string | null;
+};
+
+export type BrowserNetworkProbe = {
+  exit_ip: string | null;
+  ip_version: "IPv4" | "IPv6" | "unknown";
+  country: string | null;
+  region: string | null;
+  city: string | null;
+  isp: string | null;
+  org: string | null;
+  asn: string | null;
+  timezone: string | null;
+  sources: BrowserProbeSource[];
+};
+
 export type GetAiOkCheckResult = {
   id: string;
   checked_at: string;
@@ -50,6 +76,9 @@ export type GetAiOkCheckResult = {
   city: string | null;
   isp: string | null;
   org: string | null;
+  asn: string | null;
+  ip_version: string | null;
+  browser_probe_sources: BrowserProbeSource[];
   exit_timezone: string | null;
   proxy_envs: Record<string, string>;
   system_proxy_status: CheckStatus;

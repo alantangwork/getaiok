@@ -20,12 +20,14 @@ import {
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   clearCheckHistory,
+  collectBrowserNetworkProbe,
   deleteCheckHistory,
   getDemoResult,
   listCheckHistory,
   runGetAiOkCheck,
 } from "./api";
 import type {
+  BrowserProbeSource,
   CheckStatus,
   GetAiOkCheckResult,
   HistoryEntry,
@@ -87,7 +89,8 @@ function App() {
     setChecking(true);
     setError(null);
     try {
-      const next = isTauri ? await runGetAiOkCheck() : await fakeCheck();
+      const browserProbe = await collectBrowserNetworkProbe();
+      const next = isTauri ? await runGetAiOkCheck(browserProbe) : await fakeCheck();
       setResult(next);
       setSelectedGuide(next.repair_guides[0] ?? null);
       await refreshHistory();
@@ -115,7 +118,8 @@ function App() {
     setChecking(true);
     setError(null);
     try {
-      const next = isTauri ? await runGetAiOkCheck() : await fakeCheck();
+      const browserProbe = await collectBrowserNetworkProbe();
+      const next = isTauri ? await runGetAiOkCheck(browserProbe) : await fakeCheck();
       setResult(next);
       setSelectedGuide(next.repair_guides[0] ?? null);
       await refreshHistory();
@@ -474,11 +478,37 @@ function ReportView({ result, checking, onStart, onHistory, onGuide }: ReportPro
           <div className="metric-grid">
             <Metric label="出口 IP" value={result.exit_ip ?? "未知"} />
             <Metric label="地区" value={locationText(result)} />
+            <Metric label="ASN" value={result.asn ?? "未知"} />
+            <Metric label="IP 版本" value={result.ip_version ?? "未知"} />
+            <Metric label="IP 属性" value={ipAttributeText(result)} />
+            <Metric label="风险分" value={riskScoreText(result)} />
             <Metric label="Claude" value={result.claude.message} />
             <Metric label="Codex" value={result.codex.proxy_env_present ? result.codex.message : "代理变量未设置"} />
           </div>
         </section>
       </div>
+
+      <section className="panel pad source-panel">
+        <div className="panel-title">
+          <h3>多数据源位置</h3>
+          <span>更接近网页检测视角</span>
+        </div>
+        <div className="source-grid">
+          {result.browser_probe_sources.length === 0 ? (
+            <div className="source-row">
+              <strong>WebView 探针</strong>
+              <span>未返回数据</span>
+            </div>
+          ) : (
+            result.browser_probe_sources.map((source) => (
+              <div className="source-row" key={source.name}>
+                <strong>{source.name}</strong>
+                <span>{sourceLocationText(source)}</span>
+              </div>
+            ))
+          )}
+        </div>
+      </section>
 
       <section className="panel pad">
         <div className="panel-title">
@@ -730,6 +760,29 @@ function timezoneText(result: GetAiOkCheckResult) {
   if (result.timezone_matched === true) return "与出口地区一致";
   if (result.timezone_matched === false) return "与出口地区不一致";
   return "无法比对";
+}
+
+function ipAttributeText(result: GetAiOkCheckResult) {
+  if (result.proxy === true) return "代理 IP";
+  if (result.hosting === true) return "机房 IP";
+  if (result.hosting === false) return "住宅/原生 IP";
+  return "未知";
+}
+
+function riskScoreText(result: GetAiOkCheckResult) {
+  if (typeof result.risk_score === "number") {
+    return `${result.risk_score}/100`;
+  }
+  return result.risk_query_message ?? "未知";
+}
+
+function sourceLocationText(source: BrowserProbeSource) {
+  if (source.error) {
+    return `查询失败：${source.error}`;
+  }
+  const location = [source.country, source.region, source.city].filter(Boolean).join(" / ");
+  const network = [source.ip, source.asn, source.org ?? source.isp].filter(Boolean).join(" / ");
+  return [network, location].filter(Boolean).join("  ·  ") || "无数据";
 }
 
 function statusClass(status: CheckStatus) {

@@ -74,6 +74,34 @@ pub struct DeveloperSection {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrowserProbeSource {
+    pub name: String,
+    pub ip: Option<String>,
+    pub country: Option<String>,
+    pub region: Option<String>,
+    pub city: Option<String>,
+    pub isp: Option<String>,
+    pub org: Option<String>,
+    pub asn: Option<String>,
+    pub timezone: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrowserNetworkProbe {
+    pub exit_ip: Option<String>,
+    pub ip_version: String,
+    pub country: Option<String>,
+    pub region: Option<String>,
+    pub city: Option<String>,
+    pub isp: Option<String>,
+    pub org: Option<String>,
+    pub asn: Option<String>,
+    pub timezone: Option<String>,
+    pub sources: Vec<BrowserProbeSource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetAiOkCheckResult {
     pub id: String,
     pub checked_at: String,
@@ -88,6 +116,9 @@ pub struct GetAiOkCheckResult {
     pub city: Option<String>,
     pub isp: Option<String>,
     pub org: Option<String>,
+    pub asn: Option<String>,
+    pub ip_version: Option<String>,
+    pub browser_probe_sources: Vec<BrowserProbeSource>,
     pub exit_timezone: Option<String>,
     pub proxy_envs: BTreeMap<String, String>,
     pub system_proxy_status: CheckStatus,
@@ -127,8 +158,11 @@ pub struct HistoryEntry {
 }
 
 #[tauri::command]
-pub fn run_get_ai_ok_check(app: AppHandle) -> Result<GetAiOkCheckResult, String> {
-    let result = build_check_result();
+pub fn run_get_ai_ok_check(
+    app: AppHandle,
+    browser_probe: Option<BrowserNetworkProbe>,
+) -> Result<GetAiOkCheckResult, String> {
+    let result = build_check_result(browser_probe);
     append_history(&app, &result)?;
     Ok(result)
 }
@@ -151,7 +185,7 @@ pub fn clear_check_history(app: AppHandle) -> Result<(), String> {
     write_history(&app, &[])
 }
 
-fn build_check_result() -> GetAiOkCheckResult {
+fn build_check_result(browser_probe: Option<BrowserNetworkProbe>) -> GetAiOkCheckResult {
     let client = Client::builder()
         .timeout(Duration::from_secs(6))
         .user_agent("get-ai-ok/0.1")
@@ -162,15 +196,21 @@ fn build_check_result() -> GetAiOkCheckResult {
     let ipv6 = get_ipv6();
     let dns_servers = get_dns_servers();
     let public_info = get_public_info(&client);
-    let exit_ip = public_info
+    let exit_ip = browser_probe
         .as_ref()
-        .and_then(|v| v.get("query"))
-        .and_then(Value::as_str)
-        .map(str::to_string);
+        .and_then(|probe| probe.exit_ip.clone())
+        .or_else(|| {
+            public_info
+                .as_ref()
+                .and_then(|v| v.get("query"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
     let hosting = public_info
         .as_ref()
         .and_then(|v| v.get("hosting"))
-        .and_then(Value::as_bool);
+        .and_then(Value::as_bool)
+        .or_else(|| infer_hosting_from_probe(&browser_probe));
     let proxy = public_info
         .as_ref()
         .and_then(|v| v.get("proxy"))
@@ -192,11 +232,16 @@ fn build_check_result() -> GetAiOkCheckResult {
     let (tun_vpn_status, tun_vpn_message) = get_tun_vpn_status();
     let system_timezone = get_system_timezone();
     let cli_timezone = env::var("TZ").ok().or_else(|| system_timezone.clone());
-    let exit_timezone = public_info
+    let exit_timezone = browser_probe
         .as_ref()
-        .and_then(|v| v.get("timezone"))
-        .and_then(Value::as_str)
-        .map(str::to_string);
+        .and_then(|probe| probe.timezone.clone())
+        .or_else(|| {
+            public_info
+                .as_ref()
+                .and_then(|v| v.get("timezone"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
     let timezone_matched = compare_timezone(cli_timezone.as_deref(), exit_timezone.as_deref());
     let claude = get_claude_info();
     let codex = get_codex_info(!proxy_envs.is_empty());
@@ -273,11 +318,22 @@ fn build_check_result() -> GetAiOkCheckResult {
         ipv6,
         dns_servers,
         exit_ip,
-        country: field(&public_info, "country"),
-        region: field(&public_info, "regionName"),
-        city: field(&public_info, "city"),
-        isp: field(&public_info, "isp"),
-        org: field(&public_info, "org"),
+        country: probe_field(&browser_probe, |probe| probe.country.clone())
+            .or_else(|| field(&public_info, "country")),
+        region: probe_field(&browser_probe, |probe| probe.region.clone())
+            .or_else(|| field(&public_info, "regionName")),
+        city: probe_field(&browser_probe, |probe| probe.city.clone())
+            .or_else(|| field(&public_info, "city")),
+        isp: probe_field(&browser_probe, |probe| probe.isp.clone())
+            .or_else(|| field(&public_info, "isp")),
+        org: probe_field(&browser_probe, |probe| probe.org.clone())
+            .or_else(|| field(&public_info, "org")),
+        asn: probe_field(&browser_probe, |probe| probe.asn.clone()),
+        ip_version: probe_field(&browser_probe, |probe| Some(probe.ip_version.clone())),
+        browser_probe_sources: browser_probe
+            .as_ref()
+            .map(|probe| probe.sources.clone())
+            .unwrap_or_default(),
         exit_timezone,
         proxy_envs,
         system_proxy_status,
@@ -309,6 +365,67 @@ fn field(public_info: &Option<Value>, name: &str) -> Option<String> {
         .and_then(|v| v.get(name))
         .and_then(Value::as_str)
         .map(str::to_string)
+}
+
+fn probe_field(
+    probe: &Option<BrowserNetworkProbe>,
+    getter: impl FnOnce(&BrowserNetworkProbe) -> Option<String>,
+) -> Option<String> {
+    probe.as_ref().and_then(getter).filter(|value| !value.trim().is_empty())
+}
+
+fn infer_hosting_from_probe(probe: &Option<BrowserNetworkProbe>) -> Option<bool> {
+    let probe = probe.as_ref()?;
+    let text = [
+        probe.isp.clone(),
+        probe.org.clone(),
+        probe.asn.clone(),
+        Some(probe
+            .sources
+            .iter()
+            .filter_map(|source| source.org.clone().or_else(|| source.isp.clone()))
+            .collect::<Vec<_>>()
+            .join(" ")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" ")
+    .to_lowercase();
+    if text.is_empty() {
+        return None;
+    }
+    let datacenter_hints = [
+        "racknerd",
+        "hostpapa",
+        "colo",
+        "colocation",
+        "data center",
+        "datacenter",
+        "cloud",
+        "hosting",
+        "server",
+        "vps",
+        "digitalocean",
+        "linode",
+        "vultr",
+        "hetzner",
+        "ovh",
+        "amazon",
+        "aws",
+        "google",
+        "microsoft",
+        "azure",
+        "oracle",
+        "cloudflare",
+        "tencent",
+        "alibaba",
+    ];
+    if datacenter_hints.iter().any(|hint| text.contains(hint)) {
+        Some(true)
+    } else {
+        None
+    }
 }
 
 fn get_real_public_ip(client: &Client) -> Option<String> {
@@ -748,11 +865,17 @@ fn developer_details(result: &GetAiOkCheckResult) -> Vec<DeveloperSection> {
             title: "出口信息".to_string(),
             rows: vec![
                 row("出口 IP", opt(&result.exit_ip), CheckStatus::Unknown),
+                row("IP 版本", opt(&result.ip_version), CheckStatus::Unknown),
+                row("ASN", opt(&result.asn), CheckStatus::Unknown),
                 row("地区", format!("{} / {}", opt(&result.country), opt(&result.region)), CheckStatus::Unknown),
                 row("ISP / 组织", format!("{} / {}", opt(&result.isp), opt(&result.org)), CheckStatus::Unknown),
                 row("机房 IP", bool_text(result.hosting), if result.hosting == Some(true) { CheckStatus::Warning } else { CheckStatus::Ok }),
                 row("代理标记", bool_text(result.proxy), if result.proxy == Some(true) { CheckStatus::Warning } else { CheckStatus::Ok }),
             ],
+        },
+        DeveloperSection {
+            title: "WebView 多源出口".to_string(),
+            rows: browser_probe_rows(result),
         },
         DeveloperSection {
             title: "代理环境".to_string(),
@@ -779,6 +902,44 @@ fn row(label: &str, value: String, status: CheckStatus) -> DetailRow {
         value,
         status,
     }
+}
+
+fn browser_probe_rows(result: &GetAiOkCheckResult) -> Vec<DetailRow> {
+    if result.browser_probe_sources.is_empty() {
+        return vec![row(
+            "WebView 探针",
+            "未返回数据".to_string(),
+            CheckStatus::Unknown,
+        )];
+    }
+    result
+        .browser_probe_sources
+        .iter()
+        .map(|source| {
+            let status = if source.ip.is_some() {
+                CheckStatus::Ok
+            } else {
+                CheckStatus::Warning
+            };
+            let value = if let Some(error) = &source.error {
+                format!("查询失败：{error}")
+            } else {
+                [
+                    source.ip.clone(),
+                    source.asn.clone(),
+                    source.country.clone(),
+                    source.region.clone(),
+                    source.city.clone(),
+                    source.org.clone().or_else(|| source.isp.clone()),
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" / ")
+            };
+            row(&source.name, value, status)
+        })
+        .collect()
 }
 
 fn opt(value: &Option<String>) -> String {

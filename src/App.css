@@ -599,6 +599,40 @@ button {
   line-height: 20px;
 }
 
+.source-panel {
+  margin-bottom: 14px;
+}
+
+.source-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.source-row {
+  display: grid;
+  grid-template-columns: 132px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+
+.source-row strong {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.source-row span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 20px;
+}
+
 .developer-sections {
   display: grid;
   gap: 10px;
