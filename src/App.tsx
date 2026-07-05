@@ -21,6 +21,7 @@ import { Image } from "@tauri-apps/api/image";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   clearCheckHistory,
+  applyWindowsTimezoneFix,
   collectBrowserNetworkProbe,
   deleteCheckHistory,
   getDemoResult,
@@ -51,6 +52,8 @@ function App() {
   const [result, setResult] = useState<GetAiOkCheckResult>(() => getDemoResult());
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [selectedGuide, setSelectedGuide] = useState<RepairGuide | null>(null);
+  const [timezoneFixing, setTimezoneFixing] = useState(false);
+  const [timezoneFixMessage, setTimezoneFixMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -192,7 +195,30 @@ function App() {
 
   function openGuide(guide?: RepairGuide) {
     setSelectedGuide(guide ?? result.repair_guides[0] ?? null);
+    setTimezoneFixMessage(null);
     setView("guide");
+  }
+
+  async function runTimezoneAutoFix() {
+    if (!result.exit_timezone) {
+      setTimezoneFixMessage("当前报告没有识别到出口 IP 时区，暂时无法自动设置。");
+      return;
+    }
+    setTimezoneFixing(true);
+    setTimezoneFixMessage(null);
+    try {
+      if (!isTauri) {
+        await new Promise((resolve) => setTimeout(resolve, 600));
+        setTimezoneFixMessage("演示模式：实际应用会弹出管理员授权窗口并设置 Windows 时区。");
+        return;
+      }
+      const outcome = await applyWindowsTimezoneFix(result.exit_timezone);
+      setTimezoneFixMessage(outcome.message);
+    } catch (err) {
+      setTimezoneFixMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setTimezoneFixing(false);
+    }
   }
 
   const activeGuide = selectedGuide ?? result.repair_guides[0] ?? null;
@@ -215,6 +241,10 @@ function App() {
           error={error}
           onStart={startCheck}
           onReport={() => setView("report")}
+          onTimezoneFix={runTimezoneAutoFix}
+          onTimezoneManual={() => openGuide(result.repair_guides.find((guide) => guide.id === "timezone"))}
+          timezoneFixing={timezoneFixing}
+          timezoneFixMessage={timezoneFixMessage}
           onHistory={() => setView("history")}
           onPrivacy={() => setView("privacy")}
         />
@@ -254,6 +284,10 @@ function App() {
       {view === "guide" && (
         <GuideView
           guide={activeGuide}
+          result={result}
+          timezoneFixing={timezoneFixing}
+          timezoneFixMessage={timezoneFixMessage}
+          onTimezoneFix={runTimezoneAutoFix}
           onBack={() => setView("report")}
           onStart={startCheck}
         />
@@ -358,6 +392,10 @@ type FloatViewProps = {
   error: string | null;
   onStart: () => void;
   onReport: () => void;
+  onTimezoneFix: () => void;
+  onTimezoneManual: () => void;
+  timezoneFixing: boolean;
+  timezoneFixMessage: string | null;
   onHistory: () => void;
   onPrivacy: () => void;
 };
@@ -368,6 +406,10 @@ function FloatView({
   error,
   onStart,
   onReport,
+  onTimezoneFix,
+  onTimezoneManual,
+  timezoneFixing,
+  timezoneFixMessage,
   onHistory,
   onPrivacy,
 }: FloatViewProps) {
@@ -389,6 +431,16 @@ function FloatView({
           <SummaryRow label="DNS 状态" value={result.dns_servers.length ? "已获取" : "未知"} status={result.dns_servers.length ? "ok" : "unknown"} />
           <SummaryRow label="时区状态" value={timezoneText(result)} status={result.timezone_matched === false ? "warning" : "ok"} />
         </section>
+      )}
+
+      {!checking && result.timezone_matched === false && result.timezone_fix && (
+        <TimezoneQuickFixCard
+          result={result}
+          fixing={timezoneFixing}
+          message={timezoneFixMessage}
+          onFix={onTimezoneFix}
+          onManual={onTimezoneManual}
+        />
       )}
 
       {error && <div className="error-box">{error}</div>}
@@ -436,6 +488,44 @@ function SummaryRow({ label, value, status }: { label: string; value: string; st
       <strong title={value}>{value}</strong>
       <i className={`dot ${statusClass(status)}`} />
     </div>
+  );
+}
+
+function TimezoneQuickFixCard({
+  result,
+  fixing,
+  message,
+  onFix,
+  onManual,
+}: {
+  result: GetAiOkCheckResult;
+  fixing: boolean;
+  message: string | null;
+  onFix: () => void;
+  onManual: () => void;
+}) {
+  const fix = result.timezone_fix;
+  if (!fix) return null;
+  return (
+    <section className="timezone-fix-card">
+      <div>
+        <strong>时区与出口 IP 不一致</strong>
+        <p>{fix.note}</p>
+        <span>
+          当前：{fix.current_windows_timezone ?? "未知"} · 目标：{fix.windows_timezone_label ?? fix.exit_timezone}
+        </span>
+      </div>
+      <div className="timezone-fix-actions">
+        <button className="secondary-button" type="button" onClick={onManual}>
+          查看手动方法
+        </button>
+        <button className="primary-button" type="button" disabled={!fix.can_auto_fix || fixing} onClick={onFix}>
+          {fixing ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
+          一键设置
+        </button>
+      </div>
+      {message && <p className="fix-message">{message}</p>}
+    </section>
   );
 }
 
@@ -669,10 +759,18 @@ function HistoryView({
 
 function GuideView({
   guide,
+  result,
+  timezoneFixing,
+  timezoneFixMessage,
+  onTimezoneFix,
   onBack,
   onStart,
 }: {
   guide: RepairGuide | null;
+  result: GetAiOkCheckResult;
+  timezoneFixing: boolean;
+  timezoneFixMessage: string | null;
+  onTimezoneFix: () => void;
   onBack: () => void;
   onStart: () => void;
 }) {
@@ -696,6 +794,31 @@ function GuideView({
         </button>
       </div>
       <section className="panel pad guide-panel">
+        {guide.id === "timezone" && result.timezone_fix && (
+          <div className="auto-fix-box">
+            <div>
+              <h3>自动版</h3>
+              <p>{result.timezone_fix.note}</p>
+              <span>执行内容：关闭自动设置时区，设置目标 Windows 时区，开启 Windows Time 自动同步并立即同步时间。</span>
+            </div>
+            <button
+              className="primary-button"
+              type="button"
+              disabled={!result.timezone_fix.can_auto_fix || timezoneFixing}
+              onClick={onTimezoneFix}
+            >
+              {timezoneFixing ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
+              一键设置 Windows 时区
+            </button>
+            {timezoneFixMessage && <p className="fix-message">{timezoneFixMessage}</p>}
+          </div>
+        )}
+        {guide.id === "timezone" && (
+          <div className="manual-fix-title">
+            <h3>手动版</h3>
+            <span>按你的 Windows 版本选择对应步骤。</span>
+          </div>
+        )}
         <ol className="steps">
           {guide.steps.map((step) => (
             <li key={step}>{step}</li>

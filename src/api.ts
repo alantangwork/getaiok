@@ -4,6 +4,7 @@ import type {
   BrowserProbeSource,
   GetAiOkCheckResult,
   HistoryEntry,
+  TimezoneFixResult,
 } from "./types";
 
 const demoResult: GetAiOkCheckResult = {
@@ -63,6 +64,15 @@ const demoResult: GetAiOkCheckResult = {
   system_timezone: "China Standard Time",
   cli_timezone: "China Standard Time",
   timezone_matched: false,
+  timezone_fix: {
+    exit_timezone: "America/Los_Angeles",
+    windows_timezone_id: "Pacific Standard Time",
+    windows_timezone_label: "(UTC-08:00) Pacific Time (US & Canada)",
+    current_windows_timezone: "China Standard Time",
+    windows_version: "Windows 11",
+    can_auto_fix: true,
+    note: "检测到出口时区为 America/Los_Angeles，Windows 应设置为 (UTC-08:00) Pacific Time (US & Canada)。",
+  },
   claude: {
     installed: true,
     base_url: null,
@@ -154,6 +164,12 @@ export async function deleteCheckHistory(id: string): Promise<HistoryEntry[]> {
 
 export async function clearCheckHistory(): Promise<void> {
   return invoke<void>("clear_check_history");
+}
+
+export async function applyWindowsTimezoneFix(exitTimezone: string): Promise<TimezoneFixResult> {
+  return invoke<TimezoneFixResult>("apply_windows_timezone_fix", {
+    exitTimezone,
+  });
 }
 
 export async function collectBrowserNetworkProbe(): Promise<BrowserNetworkProbe> {

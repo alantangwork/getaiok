@@ -234,6 +234,53 @@ button {
   white-space: nowrap;
 }
 
+.timezone-fix-card {
+  display: grid;
+  gap: 12px;
+  margin: 8px 0 14px;
+  padding: 14px;
+  border: 1px solid #f2c46b;
+  border-radius: var(--radius);
+  background: #fff8e7;
+}
+
+.timezone-fix-card strong,
+.auto-fix-box h3,
+.manual-fix-title h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 16px;
+}
+
+.timezone-fix-card p,
+.auto-fix-box p {
+  margin: 6px 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 21px;
+}
+
+.timezone-fix-card span,
+.auto-fix-box span,
+.manual-fix-title span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 19px;
+}
+
+.timezone-fix-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.fix-message {
+  margin: 0;
+  color: #8a5b00;
+  font-size: 13px;
+  line-height: 21px;
+}
+
 .dot,
 .status-dot {
   width: 9px;
@@ -692,6 +739,22 @@ summary {
 .guide-panel {
   display: grid;
   gap: 14px;
+}
+
+.auto-fix-box {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #bfd0ff;
+  border-radius: var(--radius);
+  background: var(--blue-soft);
+}
+
+.manual-fix-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .steps {

@@ -5,6 +5,7 @@ pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             network_check::run_get_ai_ok_check,
+            network_check::apply_windows_timezone_fix,
             network_check::list_check_history,
             network_check::delete_check_history,
             network_check::clear_check_history

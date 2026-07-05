@@ -82,6 +82,24 @@ pub struct RepairGuide {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimezoneFixInfo {
+    pub exit_timezone: String,
+    pub windows_timezone_id: Option<String>,
+    pub windows_timezone_label: Option<String>,
+    pub current_windows_timezone: Option<String>,
+    pub windows_version: String,
+    pub can_auto_fix: bool,
+    pub note: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimezoneFixResult {
+    pub success: bool,
+    pub message: String,
+    pub windows_timezone_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DetailRow {
     pub label: String,
     pub value: String,
@@ -157,6 +175,8 @@ pub struct GetAiOkCheckResult {
     pub system_timezone: Option<String>,
     pub cli_timezone: Option<String>,
     pub timezone_matched: Option<bool>,
+    #[serde(default)]
+    pub timezone_fix: Option<TimezoneFixInfo>,
     pub claude: ClaudeInfo,
     pub codex: CodexInfo,
     #[serde(default)]
@@ -213,6 +233,13 @@ pub fn delete_check_history(app: AppHandle, id: String) -> Result<Vec<HistoryEnt
 #[tauri::command]
 pub fn clear_check_history(app: AppHandle) -> Result<(), String> {
     write_history(&app, &[])
+}
+
+#[tauri::command]
+pub async fn apply_windows_timezone_fix(exit_timezone: String) -> Result<TimezoneFixResult, String> {
+    tauri::async_runtime::spawn_blocking(move || apply_windows_timezone_fix_inner(&exit_timezone))
+        .await
+        .map_err(|err| format!("时区修复任务执行失败：{err}"))?
 }
 
 fn build_check_result(browser_probe: Option<BrowserNetworkProbe>) -> GetAiOkCheckResult {
@@ -274,6 +301,9 @@ fn build_check_result(browser_probe: Option<BrowserNetworkProbe>) -> GetAiOkChec
                 .map(str::to_string)
         });
     let timezone_matched = compare_timezone(cli_timezone.as_deref(), exit_timezone.as_deref());
+    let timezone_fix = exit_timezone
+        .as_ref()
+        .map(|timezone| timezone_fix_info(timezone, system_timezone.clone()));
     let claude = get_claude_info();
     let codex = get_codex_info(!proxy_envs.is_empty());
 
@@ -299,7 +329,7 @@ fn build_check_result(browser_probe: Option<BrowserNetworkProbe>) -> GetAiOkChec
 
     if matches!(timezone_matched, Some(false)) {
         suggestions.push("本机时区与出口 IP 所在时区不一致。".to_string());
-        guides.push(timezone_guide(exit_timezone.clone()));
+        guides.push(timezone_guide(exit_timezone.clone(), system_timezone.clone()));
     }
 
     if hosting == Some(true) || proxy == Some(true) {
@@ -381,6 +411,7 @@ fn build_check_result(browser_probe: Option<BrowserNetworkProbe>) -> GetAiOkChec
         system_timezone,
         cli_timezone,
         timezone_matched,
+        timezone_fix,
         claude,
         codex,
         suggestions,
@@ -801,7 +832,133 @@ fn compare_timezone(local: Option<&str>, exit: Option<&str>) -> Option<bool> {
     if local == "China Standard Time" && exit.starts_with("Asia/Shanghai") {
         return Some(true);
     }
+    if let Some((windows_id, _)) = iana_to_windows_timezone(exit) {
+        return Some(local == windows_id);
+    }
     Some(false)
+}
+
+fn timezone_fix_info(exit_timezone: &str, current_windows_timezone: Option<String>) -> TimezoneFixInfo {
+    let target = iana_to_windows_timezone(exit_timezone);
+    let windows_version = powershell("(Get-CimInstance Win32_OperatingSystem).Caption", 4)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "Windows".to_string());
+    let note = match target {
+        Some((windows_id, label)) => format!(
+            "检测到出口时区为 {exit_timezone}，Windows 应设置为 {label}（ID：{windows_id}）。自动修复会关闭自动设置时区、开启 Windows Time 自动同步并立即同步时间。"
+        ),
+        None => format!(
+            "检测到出口时区为 {exit_timezone}，但首版暂未内置对应 Windows 时区映射。请先使用手动方法在 Windows 时区列表中选择最接近的出口地区。"
+        ),
+    };
+
+    TimezoneFixInfo {
+        exit_timezone: exit_timezone.to_string(),
+        windows_timezone_id: target.map(|(id, _)| id.to_string()),
+        windows_timezone_label: target.map(|(_, label)| label.to_string()),
+        current_windows_timezone,
+        windows_version,
+        can_auto_fix: target.is_some(),
+        note,
+    }
+}
+
+fn apply_windows_timezone_fix_inner(exit_timezone: &str) -> Result<TimezoneFixResult, String> {
+    let (windows_timezone_id, _) = iana_to_windows_timezone(exit_timezone)
+        .ok_or_else(|| format!("暂不支持自动映射出口时区：{exit_timezone}"))?;
+    let script_path = env::temp_dir().join("getaiok-timezone-fix.ps1");
+    fs::write(&script_path, timezone_fix_script(windows_timezone_id))
+        .map_err(|err| format!("写入临时修复脚本失败：{err}"))?;
+    let path = script_path.to_string_lossy().replace('\'', "''");
+    let launcher = format!(
+        "$p = '{path}'; Start-Process -FilePath powershell -Verb RunAs -Wait -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$p)"
+    );
+    let output = Command::new("powershell")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &launcher])
+        .output()
+        .map_err(|err| format!("启动管理员修复进程失败：{err}"))?;
+
+    if output.status.success() {
+        Ok(TimezoneFixResult {
+            success: true,
+            message: "已提交 Windows 时区和时间同步设置。请在管理员授权窗口中确认；完成后重新检测。".to_string(),
+            windows_timezone_id: windows_timezone_id.to_string(),
+        })
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(if stderr.is_empty() {
+            "管理员修复进程未成功完成，可能是用户取消了 UAC 授权。".to_string()
+        } else {
+            stderr
+        })
+    }
+}
+
+fn timezone_fix_script(windows_timezone_id: &str) -> String {
+    let escaped_id = windows_timezone_id.replace('\'', "''");
+    format!(
+        r#"$ErrorActionPreference = 'Stop'
+Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\tzautoupdate' -Name Start -Type DWord -Value 4
+if (Get-Service tzautoupdate -ErrorAction SilentlyContinue) {{
+  Stop-Service tzautoupdate -Force -ErrorAction SilentlyContinue
+  Set-Service tzautoupdate -StartupType Disabled
+}}
+tzutil /s '{escaped_id}'
+Set-Service w32time -StartupType Automatic
+if ((Get-Service w32time).Status -ne 'Running') {{
+  Start-Service w32time
+}}
+w32tm /config /manualpeerlist:"time.windows.com,0x9 time.google.com,0x9 time.cloudflare.com,0x9" /syncfromflags:manual /reliable:no /update | Out-Null
+Restart-Service w32time -Force
+w32tm /resync /force | Out-Null
+"#
+    )
+}
+
+fn iana_to_windows_timezone(iana: &str) -> Option<(&'static str, &'static str)> {
+    match iana {
+        "Etc/UTC" | "UTC" => Some(("UTC", "(UTC) Coordinated Universal Time")),
+        "America/Los_Angeles" | "America/Vancouver" | "America/Tijuana" => {
+            Some(("Pacific Standard Time", "(UTC-08:00) Pacific Time (US & Canada)"))
+        }
+        "America/Denver" | "America/Boise" | "America/Edmonton" => {
+            Some(("Mountain Standard Time", "(UTC-07:00) Mountain Time (US & Canada)"))
+        }
+        "America/Phoenix" => Some(("US Mountain Standard Time", "(UTC-07:00) Arizona")),
+        "America/Chicago" | "America/Winnipeg" | "America/Mexico_City" => {
+            Some(("Central Standard Time", "(UTC-06:00) Central Time (US & Canada)"))
+        }
+        "America/New_York" | "America/Toronto" | "America/Detroit" => {
+            Some(("Eastern Standard Time", "(UTC-05:00) Eastern Time (US & Canada)"))
+        }
+        "America/Halifax" => Some(("Atlantic Standard Time", "(UTC-04:00) Atlantic Time (Canada)")),
+        "America/Sao_Paulo" => Some(("E. South America Standard Time", "(UTC-03:00) Brasilia")),
+        "Europe/London" => Some(("GMT Standard Time", "(UTC+00:00) Dublin, Edinburgh, Lisbon, London")),
+        "Europe/Paris" | "Europe/Berlin" | "Europe/Madrid" | "Europe/Rome" | "Europe/Amsterdam" => {
+            Some(("W. Europe Standard Time", "(UTC+01:00) Amsterdam, Berlin, Rome, Stockholm, Vienna"))
+        }
+        "Europe/Warsaw" | "Europe/Prague" | "Europe/Budapest" => {
+            Some(("Central Europe Standard Time", "(UTC+01:00) Belgrade, Bratislava, Budapest, Ljubljana, Prague"))
+        }
+        "Europe/Athens" | "Europe/Bucharest" => Some(("GTB Standard Time", "(UTC+02:00) Athens, Bucharest")),
+        "Europe/Istanbul" => Some(("Turkey Standard Time", "(UTC+03:00) Istanbul")),
+        "Europe/Moscow" => Some(("Russian Standard Time", "(UTC+03:00) Moscow, St. Petersburg")),
+        "Asia/Dubai" => Some(("Arabian Standard Time", "(UTC+04:00) Abu Dhabi, Muscat")),
+        "Asia/Kolkata" | "Asia/Calcutta" => Some(("India Standard Time", "(UTC+05:30) Chennai, Kolkata, Mumbai, New Delhi")),
+        "Asia/Bangkok" | "Asia/Ho_Chi_Minh" | "Asia/Jakarta" => Some(("SE Asia Standard Time", "(UTC+07:00) Bangkok, Hanoi, Jakarta")),
+        "Asia/Shanghai" | "Asia/Chongqing" | "Asia/Hong_Kong" | "Asia/Macau" => {
+            Some(("China Standard Time", "(UTC+08:00) Beijing, Chongqing, Hong Kong, Urumqi"))
+        }
+        "Asia/Singapore" | "Asia/Kuala_Lumpur" => Some(("Singapore Standard Time", "(UTC+08:00) Kuala Lumpur, Singapore")),
+        "Asia/Taipei" => Some(("Taipei Standard Time", "(UTC+08:00) Taipei")),
+        "Asia/Tokyo" => Some(("Tokyo Standard Time", "(UTC+09:00) Osaka, Sapporo, Tokyo")),
+        "Asia/Seoul" => Some(("Korea Standard Time", "(UTC+09:00) Seoul")),
+        "Australia/Sydney" | "Australia/Melbourne" => Some(("AUS Eastern Standard Time", "(UTC+10:00) Canberra, Melbourne, Sydney")),
+        "Australia/Brisbane" => Some(("E. Australia Standard Time", "(UTC+10:00) Brisbane")),
+        "Pacific/Auckland" => Some(("New Zealand Standard Time", "(UTC+12:00) Auckland, Wellington")),
+        _ => None,
+    }
 }
 
 fn get_claude_info() -> ClaudeInfo {
@@ -1083,19 +1240,41 @@ fn dns_guide() -> RepairGuide {
     }
 }
 
-fn timezone_guide(exit_timezone: Option<String>) -> RepairGuide {
+fn timezone_guide(exit_timezone: Option<String>, system_timezone: Option<String>) -> RepairGuide {
     let target = exit_timezone.unwrap_or_else(|| "America/Los_Angeles".to_string());
+    let fix = timezone_fix_info(&target, system_timezone);
+    let windows_id = fix
+        .windows_timezone_id
+        .clone()
+        .unwrap_or_else(|| "请在 Windows 时区列表中选择与出口 IP 地区最接近的时区".to_string());
+    let windows_label = fix
+        .windows_timezone_label
+        .clone()
+        .unwrap_or_else(|| target.clone());
     RepairGuide {
         id: "timezone".to_string(),
-        title: "调整系统或 CLI 时区".to_string(),
-        summary: "本机时区与出口 IP 所在地区不一致。桌面客户端通常跟随 Windows 系统时区，CLI 才会读取当前终端的 TZ。".to_string(),
+        title: "调整 Windows 系统时区".to_string(),
+        summary: format!("本机时区与出口 IP 所在地区不一致。桌面客户端通常跟随 Windows 系统时区，建议设置为 {windows_label}。"),
         steps: vec![
-            format!("确认当前出口 IP 所在时区：{target}。"),
-            "如果使用 Claude/Codex 桌面客户端：打开 Windows 设置 -> 时间和语言 -> 日期和时间 -> 时区，改为与出口 IP 匹配的时区。".to_string(),
-            "如果只使用 CLI：可以仅在当前 PowerShell 临时设置 TZ，避免影响整个系统。".to_string(),
-            "重新打开对应客户端或终端，然后重新运行检测确认时区一致性。".to_string(),
+            format!("当前出口 IP 时区：{target}；Windows 目标时区：{windows_label}；Windows ID：{windows_id}。"),
+            "Windows 11：打开 设置 -> 时间和语言 -> 日期和时间；关闭“自动设置时区”；时区选择目标时区；开启“自动设置时间”；点击“立即同步”。".to_string(),
+            "Windows 10：打开 设置 -> 时间和语言 -> 日期和时间；关闭“自动设置时区”；在“时区”下拉框选择目标时区；开启“自动设置时间”；点击“立即同步”。".to_string(),
+            "如果使用 Claude/Codex 桌面客户端：调整 Windows 系统时区后，完全退出并重新打开客户端。".to_string(),
+            "如果只使用 CLI：可以只在当前 PowerShell 临时设置 TZ，但桌面客户端仍应调整 Windows 系统时区。".to_string(),
+            "完成后重新运行 get ai ok 检测，确认时区状态变为“与出口地区一致”。".to_string(),
         ],
-        developer_commands: vec![format!(r#"$env:TZ="{target}""#)],
+        developer_commands: if fix.can_auto_fix {
+            vec![
+                format!(r#"tzutil /s "{windows_id}""#),
+                "Set-Service w32time -StartupType Automatic".to_string(),
+                "Start-Service w32time".to_string(),
+                r#"w32tm /config /manualpeerlist:"time.windows.com,0x9 time.google.com,0x9 time.cloudflare.com,0x9" /syncfromflags:manual /reliable:no /update"#.to_string(),
+                "w32tm /resync /force".to_string(),
+                format!(r#"$env:TZ="{target}""#),
+            ]
+        } else {
+            vec![format!(r#"$env:TZ="{target}""#)]
+        },
     }
 }
 

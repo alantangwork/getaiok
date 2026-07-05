@@ -41,6 +41,22 @@ export type RepairGuide = {
   developer_commands: string[];
 };
 
+export type TimezoneFixInfo = {
+  exit_timezone: string;
+  windows_timezone_id: string | null;
+  windows_timezone_label: string | null;
+  current_windows_timezone: string | null;
+  windows_version: string;
+  can_auto_fix: boolean;
+  note: string;
+};
+
+export type TimezoneFixResult = {
+  success: boolean;
+  message: string;
+  windows_timezone_id: string;
+};
+
 export type DetailRow = {
   label: string;
   value: string;
@@ -111,6 +127,7 @@ export type GetAiOkCheckResult = {
   system_timezone: string | null;
   cli_timezone: string | null;
   timezone_matched: boolean | null;
+  timezone_fix: TimezoneFixInfo | null;
   claude: ClaudeInfo;
   codex: CodexInfo;
   suggestions: string[];
