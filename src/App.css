@@ -152,6 +152,9 @@ button {
 
 .float-body,
 .privacy-body {
+  height: calc(100vh - 46px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 22px;
 }
 
